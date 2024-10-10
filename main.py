@@ -18,8 +18,8 @@ from PyQt5.QtCore import Qt, QMimeData, QPoint, pyqtSignal
 import cv2
 import numpy as np
 import subprocess
-SCREENCAP_HEIGHT = 400
-SCREENCAP_WIDTH = 400
+SCREENCAP_HEIGHT = 800
+SCREENCAP_WIDTH = 800
 SCREENCAP_FRAME_COUNT = 9
 
 def GenerateScreencaps(input_video_file):
@@ -225,6 +225,8 @@ class VideoOrganizer(QMainWindow):
                 "sFoitaradAntMneoyurplab": "ForeplayAndMasturbation",
                 "dooniiotgsgyP": "DoggyPosition",
                 "iSinyhBOeresddwa": "SidewaysAndBentOver",
+                "sortefco": "Softcore",
+                "Trsah": "Trash"
             }
             # Drop areas
             self.add_drop_area_layout(self.mainLayout, folder_names_mapping)
