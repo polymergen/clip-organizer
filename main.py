@@ -18,9 +18,26 @@ from PyQt5.QtCore import Qt, QMimeData, QPoint, pyqtSignal
 import cv2
 import numpy as np
 import subprocess
-SCREENCAP_HEIGHT = 800
-SCREENCAP_WIDTH = 800
+SCREENCAP_HEIGHT = 350
+SCREENCAP_WIDTH = 350
 SCREENCAP_FRAME_COUNT = 9
+colors = [
+    "red",
+    "green",
+    "blue",
+    "yellow",
+    "purple",
+    "orange",
+    "pink",
+    "brown",
+    "cyan",
+    "magenta",
+    "lime",
+    "maroon",
+    "navy",
+    "olive",
+    "teal",
+]
 
 def GenerateScreencaps(input_video_file):
     # Capture the video using cv2.VideoCapture
@@ -111,7 +128,7 @@ class DropArea(QLabel):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setText(text_shown)
-        self.setStyleSheet("border: 2px dashed #aaa")
+        # self.setStyleSheet("border: 2px dashed #aaa")
         self.setAcceptDrops(True)
         self._folder_name = actual_folder_text.split("\n")[
             0
@@ -123,7 +140,9 @@ class DropArea(QLabel):
 
     def dropEvent(self, event):
         file_path = event.mimeData().text()
-        destination_folder = os.path.join(os.path.dirname(file_path), self._folder_name)
+        file_path_parent = os.path.dirname(file_path)
+        parent_of_parent = os.path.dirname(file_path_parent) 
+        destination_folder = os.path.join(parent_of_parent, self._folder_name)
 
         # Create the folder if it doesn't exist
         if not os.path.exists(destination_folder):
@@ -131,10 +150,11 @@ class DropArea(QLabel):
 
         # Move the file
         file_name = os.path.basename(file_path)
+        ori_parent_folder = os.path.dirname(file_path)
         new_path = os.path.join(destination_folder, file_name)
         os.rename(file_path, new_path)
 
-        print(f"Moved file {file_name} to {self._folder_name}")
+        print(f"Moved file {file_name} from {ori_parent_folder} to {self._folder_name}")
 
         # Emit signal with the original file path
         self.file_dropped.emit(file_path)
@@ -196,68 +216,92 @@ class VideoOrganizer(QMainWindow):
         # Scroll area for thumbnails
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        self.thumbnail_widget = QWidget()
+        self.screencap_canvas_widget = QWidget()
 
-        self.thumbnail_layout = QGridLayout(self.thumbnail_widget)
-        self.thumbnail_layout.setSpacing(10)
-        scroll_area.setWidget(self.thumbnail_widget)
+        self.MainGridLayout = QGridLayout(self.screencap_canvas_widget)
+        self.MainGridLayout.setSpacing(10)
+        scroll_area.setWidget(self.screencap_canvas_widget)
         self.mainLayout.addWidget(scroll_area)
+
+        self.InnerGridLayouts = []
 
     def add_drop_area_layout(self, layout, folder_names_mapping):
         drop_area_layout = QHBoxLayout()
+        i = 0 
         for actual_name, shown_name in folder_names_mapping.items():
-            folder_path = os.path.join(self.VideoFolder, actual_name)
+            folder_path = os.path.join(self.ParentFolder, actual_name)
             os.makedirs(folder_path, exist_ok=True)
             drop_area = DropArea(actual_folder_text=actual_name, text_shown=f"{shown_name}\n Drop Area")
-            drop_area.file_dropped.connect(self.remove_thumbnail)
+            drop_area.file_dropped.connect(self.remove_sreencap)
+            drop_area.setStyleSheet(f"border: 2px dashed {colors[i % len(colors)]};")
+            i += 1
             drop_area_layout.addWidget(drop_area)
         layout.addLayout(drop_area_layout)
 
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
+        row = 0 
+        col = 0
+        max_cols = 3
+        i = 0
         if folder:
-            self.loadScreenCaps(folder)
-            self.VideoFolder = folder
-            folder_names_mapping = {
-                "BocbkoSu": "BoobSuck",
-                "Colgwir": "Cowgirl",
-                "Miaysrson": "Missionary",
-                "sFoitaradAntMneoyurplab": "ForeplayAndMasturbation",
-                "dooniiotgsgyP": "DoggyPosition",
-                "iSinyhBOeresddwa": "SidewaysAndBentOver",
-                "sortefco": "Softcore",
-                "Trsah": "Trash"
-            }
-            # Drop areas
-            self.add_drop_area_layout(self.mainLayout, folder_names_mapping)
+            self.ParentFolder = folder
+            subfolders = [f.name for f in os.scandir(folder) if f.is_dir()]
+            folder_names_mapping = {subfolder: subfolder for subfolder in subfolders}
 
-    def loadScreenCaps(self, folder):
+            for subfolder, _ in folder_names_mapping.items():
+                subgrid_layout = self.LoopOverFolderAndGenerateScreencapsPerFileForSubGrid(os.path.join(folder, subfolder))
+                if subgrid_layout is None: continue
+                subgrid_widget = QWidget()
+                subgrid_widget.setStyleSheet(
+                    f"""
+    border: 2px dashed {colors[i % len(colors)]};
+"""
+                )
 
-        row, col = 0, 0
-        max_cols = 5  # Adjust this value to change the number of columns
-
-        for file in os.listdir(folder):
-            file_path = os.path.join(folder, file)
-            if os.path.isfile(file_path):
-                qpixmap_image = GenerateScreencaps(file_path)
-                self.thumbnail_layout.addWidget(qpixmap_image, row, col)
-                self.screencaps[file_path] = qpixmap_image
+                subgrid_widget.setLayout(subgrid_layout)
+                self.MainGridLayout.addWidget(subgrid_widget, row, col)
+                i += 1
                 col += 1
                 if col >= max_cols:
                     col = 0
                     row += 1
 
-    def remove_screencap(self, file_path):
+            # Drop areas
+            self.add_drop_area_layout(self.mainLayout, folder_names_mapping)
+
+    def LoopOverFolderAndGenerateScreencapsPerFileForSubGrid(self, folder):
+        row, col = 0, 1
+        max_cols = 5  # Adjust this value to change the number of columns
+        subgrid = QGridLayout()
+
+        file_list = os.listdir(folder)
+        if len(file_list) == 0: return None
+        label = QLabel(os.path.basename(folder))
+        label.setStyleSheet("background-color: black ; color: white")
+        label.setMaximumHeight(SCREENCAP_HEIGHT)
+        label.setMaximumWidth(SCREENCAP_WIDTH)
+        subgrid.addWidget(label, row, 0)
+
+        for file in file_list:
+            file_path = os.path.join(folder, file)
+            if os.path.isfile(file_path):
+                qpixmap_image = GenerateScreencaps(file_path)
+                qpixmap_image.setMaximumHeight(SCREENCAP_HEIGHT)
+                qpixmap_image.setMaximumWidth(SCREENCAP_WIDTH)
+                self.screencaps[file_path] = (qpixmap_image, subgrid)
+                subgrid.addWidget(qpixmap_image, row, col)
+                col += 1
+                if col >= max_cols:
+                    col = 0
+                    row += 1
+        return subgrid
+
+    def remove_sreencap(self, file_path):
         if file_path in self.screencaps:
-            thumbnail = self.screencaps[file_path]
-            self.thumbnail_layout.removeWidget(thumbnail)
-            thumbnail.deleteLater()
-            del self.screencaps[file_path]
-    def remove_thumbnail(self, file_path):
-        if file_path in self.screencaps:
-            thumbnail = self.screencaps[file_path]
-            self.thumbnail_layout.removeWidget(thumbnail)
-            thumbnail.deleteLater()
+            image, subgrid = self.screencaps[file_path]
+            subgrid.removeWidget(image)
+            image.deleteLater()
             del self.screencaps[file_path]
 
 
