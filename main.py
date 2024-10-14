@@ -226,7 +226,10 @@ class VideoOrganizer(QMainWindow):
                 "dooniiotgsgyP": "DoggyPosition",
                 "iSinyhBOeresddwa": "SidewaysAndBentOver",
                 "sortefco": "Softcore",
-                "Trsah": "Trash"
+                "Trsah": "Trash",
+                "dStnlHOerngadi": "StandingOrHeld",
+                "iSiogtenrstIntin": "SittingInsertion",
+                "OPoVfPwi-enVitO": "PointOfView-POV",
             }
             # Drop areas
             self.add_drop_area_layout(self.mainLayout, folder_names_mapping)
