@@ -18,6 +18,7 @@ from PyQt5.QtCore import Qt, QMimeData, QPoint, pyqtSignal
 import cv2
 import numpy as np
 import subprocess
+from tqdm import tqdm
 SCREENCAP_HEIGHT = 800
 SCREENCAP_WIDTH = 800
 SCREENCAP_FRAME_COUNT = 9
@@ -32,7 +33,7 @@ def GenerateScreencaps(input_video_file):
             print(f"Error opening video: {input_video_file}")
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"Num frames: {num_frames}")
+    # print(f"Num frames: {num_frames}")
 
     if num_frames < 1: 
         print("No frames in video {}".format(input_video_file))
@@ -73,7 +74,7 @@ def GenerateScreencaps(input_video_file):
             ret, frame = capture.read()
 
             if not ret:
-                print("Error reading frame")
+                # print("Error reading frame")
                 continue 
 
             # Add the frame to the output image
@@ -265,7 +266,7 @@ class VideoOrganizer(QMainWindow):
         row, col = 0, 0
         max_cols = 3  # Adjust this value to change the number of columns
 
-        for file in os.listdir(folder):
+        for file in tqdm(os.listdir(folder), desc="Loading screencaps"):
             file_path = os.path.join(folder, file)
             if os.path.isfile(file_path):
                 if  file_path in self.screencaps:
