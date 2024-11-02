@@ -49,7 +49,7 @@ def GenerateScreencaps(input_video_file):
     # Get the width and height of the frames in the video
     frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print("Frame width: {} Frame height: {}".format(frame_width, frame_height))
+    # print("Frame width: {} Frame height: {}".format(frame_width, frame_height))
 
     # Create an empty image with the correct dimensions
     output_image = np.zeros((num_rows * frame_height, num_cols * frame_width, 3), np.uint8)
@@ -186,12 +186,17 @@ class VideoOrganizer(QMainWindow):
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        self.mainLayout = QVBoxLayout(central_widget)
+        self.drop_area_layout = QVBoxLayout(central_widget)
 
         # Button to select folder
         select_button = QPushButton("Select Video Folder")
         select_button.clicked.connect(self.selectFolder)
-        self.mainLayout.addWidget(select_button)
+        self.drop_area_layout.addWidget(select_button)
+
+        # Button to rearrange images
+        rearrange_button = QPushButton("Rearrange Images")
+        rearrange_button.clicked.connect(self.rearrange_images)
+        self.drop_area_layout.addWidget(rearrange_button)
 
         # Scroll area for thumbnails
         scroll_area = QScrollArea()
@@ -201,24 +206,44 @@ class VideoOrganizer(QMainWindow):
         self.thumbnail_layout = QGridLayout(self.thumbnail_widget)
         self.thumbnail_layout.setSpacing(10)
         scroll_area.setWidget(self.thumbnail_widget)
-        self.mainLayout.addWidget(scroll_area)
+        self.drop_area_layout.addWidget(scroll_area)
 
     def add_drop_area_layout(self, layout, folder_names_mapping):
-        drop_area_layout = QHBoxLayout()
+        self.drop_area_layout = QHBoxLayout()
         for actual_name, shown_name in folder_names_mapping.items():
             folder_path = os.path.join(self.VideoFolder, actual_name)
             os.makedirs(folder_path, exist_ok=True)
             drop_area = DropArea(actual_folder_text=actual_name, text_shown=f"{shown_name}\n Drop Area")
             drop_area.file_dropped.connect(self.remove_thumbnail)
-            drop_area_layout.addWidget(drop_area)
-        layout.addLayout(drop_area_layout)
+            self.drop_area_layout.addWidget(drop_area)
+        layout.addLayout(self.drop_area_layout)
+
+    def rearrange_images(self):
+        self.clear_droplayouts()
+        self.clear_screencaps()
+        self.loadScreencapsGivenFolder(self.current_organizing_folder)
+
+    def clear_droplayouts(self):
+        for i in reversed(range(self.drop_area_layout.count())):
+            widget = self.drop_area_layout.itemAt(i).widget()
+            if widget is not None:
+                self.drop_area_layout.removeWidget(widget)
+                widget.deleteLater()
+
+    def clear_screencaps(self):
+        for file_path in list(self.screencaps.keys()):
+            self.remove_screencap(file_path)
 
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
+        self.current_organizing_folder = folder
         if folder:
-            self.loadScreenCaps(folder)
-            self.VideoFolder = folder
-            folder_names_mapping = {
+            self.loadScreencapsGivenFolder(folder)
+
+    def loadScreencapsGivenFolder(self, folder):
+        self.loadScreenCaps(folder)
+        self.VideoFolder = folder
+        folder_names_mapping = {
                 "BocbkoSu": "BoobSuck",
                 "Colgwir": "Cowgirl",
                 "Miaysrson": "Missionary",
@@ -230,21 +255,25 @@ class VideoOrganizer(QMainWindow):
                 "dStnlHOerngadi": "StandingOrHeld",
                 "iSiogtenrstIntin": "SittingInsertion",
                 "OPoVfPwi-enVitO": "PointOfView-POV",
+                "StiernoyL": "StoryLine",
             }
-            # Drop areas
-            self.add_drop_area_layout(self.mainLayout, folder_names_mapping)
+        # Drop areas
+        self.add_drop_area_layout(self.drop_area_layout, folder_names_mapping)
 
     def loadScreenCaps(self, folder):
 
         row, col = 0, 0
-        max_cols = 5  # Adjust this value to change the number of columns
+        max_cols = 3  # Adjust this value to change the number of columns
 
         for file in os.listdir(folder):
             file_path = os.path.join(folder, file)
             if os.path.isfile(file_path):
-                qpixmap_image = GenerateScreencaps(file_path)
-                self.thumbnail_layout.addWidget(qpixmap_image, row, col)
+                if  file_path in self.screencaps:
+                    qpixmap_image = self.screencaps[file_path]
+                else:
+                    qpixmap_image = GenerateScreencaps(file_path)
                 self.screencaps[file_path] = qpixmap_image
+                self.thumbnail_layout.addWidget(qpixmap_image, row, col)
                 col += 1
                 if col >= max_cols:
                     col = 0
@@ -254,8 +283,8 @@ class VideoOrganizer(QMainWindow):
         if file_path in self.screencaps:
             thumbnail = self.screencaps[file_path]
             self.thumbnail_layout.removeWidget(thumbnail)
-            thumbnail.deleteLater()
-            del self.screencaps[file_path]
+            # thumbnail.deleteLater()
+            # del self.screencaps[file_path] # keep the variable in memory
     def remove_thumbnail(self, file_path):
         if file_path in self.screencaps:
             thumbnail = self.screencaps[file_path]
