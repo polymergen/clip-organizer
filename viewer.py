@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import subprocess
 from tqdm import tqdm
+import pickle
 
 
 
@@ -36,11 +37,16 @@ class Label(QLabel):
 
     def show_context_menu(self, position):
         context_menu = QMenu(self)
-        play_action = context_menu.addAction("Play")
+        copy_action = context_menu.addAction("Copy")
         action = context_menu.exec_(self.mapToGlobal(position))
 
-        if action == play_action:
-            self.play_video()
+        if action == copy_action:
+            self.copy_to_clipboard()
+
+    def copy_to_clipboard(self):
+        clipboard = QApplication.clipboard()
+        self.file_path = self.file_path.replace('/', '\\')
+        clipboard.setText(self.file_path)
 
     def play_video(self):
         try:
@@ -49,17 +55,51 @@ class Label(QLabel):
             print("Error: mpv is not installed or not in the system PATH")
     
     def enterEvent(self, event):
-        self.setToolTip(self.file_path)
+        file_size = os.path.getsize(self.file_path)
+        if file_size < 1024:
+            file_size_str = f"{file_size} B"
+        elif file_size < 1024 ** 2:
+            file_size_str = f"{file_size / 1024:.2f} KB"
+        elif file_size < 1024 ** 3:
+            file_size_str = f"{file_size / 1024 ** 2:.2f} MB"
+        else:
+            file_size_str = f"{file_size / 1024 ** 3:.2f} GB"
+        
+        self.setToolTip(self.file_path + " Size: " + str(file_size_str))
         super().enterEvent(event)
 
 def GenerateScreencaps(input_video_file):
     # Capture the video using cv2.VideoCapture
     # Replace the path with the path to the video file you want to use
+    try:
+        output_image = cv2.imread(input_video_file)
+        output_image_width = output_image.shape[1]
+        output_image_height = output_image.shape[0]
+        bytes_per_line = 3 * output_image_width
+        q_img = QPixmap.fromImage(
+                QImage(
+                    output_image.data,
+                    output_image_width,
+                    output_image_height,
+                    bytes_per_line,
+                    QImage.Format_RGB888,
+                ).rgbSwapped()
+            )
+        screencap = Label(
+        q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), input_video_file
+        )
+        return  screencap
+    except:
+        print("Error: Unable to read image file")
+        return None
+    
+    
     capture = cv2.VideoCapture(input_video_file)
 
     # print error message if opening video failed
     if not capture.isOpened():
             print(f"Error opening video: {input_video_file}")
+            
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     # print(f"Num frames: {num_frames}")
@@ -156,7 +196,8 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.scroll_area)
 
     def selectFolder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Directory")
+        folder = QFileDialog.getExistingDirectory(self, "Select Directory", "D:/awan/iCloudDrive/CloudData/Settings/Config/Google/UserSettings/Mapdata")
+
         if folder:
             self.displayScreencaps(folder)
 
