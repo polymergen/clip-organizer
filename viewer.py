@@ -1,5 +1,7 @@
 import sys
 import os
+import sqlite3
+import base64
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -13,18 +15,71 @@ from PyQt5.QtWidgets import (
     QMenu,
 )
 from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QBuffer
 import cv2
 import numpy as np
 import subprocess
 from tqdm import tqdm
-import pickle
 
 
 
 SCREENCAP_HEIGHT = 800
 SCREENCAP_WIDTH = 800
 SCREENCAP_FRAME_COUNT = 9
+
+class ScreencapDatabase:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.init_database()
+    
+    def init_database(self):
+        """Initialize the database and create the screencaps table if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS screencaps (
+                file_path TEXT PRIMARY KEY,
+                image_data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    
+    def get_screencap(self, file_path):
+        """Get screencap from database by file path."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT image_data FROM screencaps WHERE file_path = ?', (file_path,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    
+    def save_screencap(self, file_path, image_data):
+        """Save screencap to database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO screencaps (file_path, image_data) 
+            VALUES (?, ?)
+        ''', (file_path, image_data))
+        conn.commit()
+        conn.close()
+
+def pixmap_to_base64(pixmap):
+    """Convert QPixmap to base64 encoded string."""
+    buffer = QBuffer()
+    buffer.open(QBuffer.WriteOnly)
+    pixmap.save(buffer, "PNG")
+    image_data = buffer.data().data()
+    return base64.b64encode(image_data).decode('utf-8')
+
+def base64_to_pixmap(base64_string):
+    """Convert base64 encoded string to QPixmap."""
+    image_data = base64.b64decode(base64_string.encode('utf-8'))
+    pixmap = QPixmap()
+    pixmap.loadFromData(image_data)
+    return pixmap
 
 class Label(QLabel):
     def __init__(self, pixmap, file_path, parent=None):
@@ -68,37 +123,55 @@ class Label(QLabel):
         self.setToolTip(self.file_path + " Size: " + str(file_size_str))
         super().enterEvent(event)
 
-def GenerateScreencaps(input_video_file):
-    # Capture the video using cv2.VideoCapture
-    # Replace the path with the path to the video file you want to use
+def GenerateScreencaps(input_video_file, db):
+    """Generate screencaps with database caching."""
+    # First check if screencap exists in database
+    cached_data = db.get_screencap(input_video_file)
+    if cached_data:
+        print(f"Using cached screencap for {input_video_file}")
+        cached_pixmap = base64_to_pixmap(cached_data)
+        screencap = Label(
+            cached_pixmap.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
+            input_video_file
+        )
+        return screencap
+    
+    # If not in database, generate new screencap
+    # First try to read as image file
     try:
         output_image = cv2.imread(input_video_file)
-        output_image_width = output_image.shape[1]
-        output_image_height = output_image.shape[0]
-        bytes_per_line = 3 * output_image_width
-        q_img = QPixmap.fromImage(
-                QImage(
-                    output_image.data,
-                    output_image_width,
-                    output_image_height,
-                    bytes_per_line,
-                    QImage.Format_RGB888,
-                ).rgbSwapped()
+        if output_image is not None:
+            output_image_width = output_image.shape[1]
+            output_image_height = output_image.shape[0]
+            bytes_per_line = 3 * output_image_width
+            q_img = QPixmap.fromImage(
+                    QImage(
+                        output_image.data,
+                        output_image_width,
+                        output_image_height,
+                        bytes_per_line,
+                        QImage.Format_RGB888,
+                    ).rgbSwapped()
+                )
+            # Save to database
+            db.save_screencap(input_video_file, pixmap_to_base64(q_img))
+            
+            screencap = Label(
+                q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
+                input_video_file
             )
-        screencap = Label(
-        q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), input_video_file
-        )
-        return  screencap
-    except:
-        print("Error: Unable to read image file")
-        return None
+            return screencap
+    except Exception:
+        pass
     
-    
+    # If image reading failed, try video processing
+    print(f"Generating screencap for video: {input_video_file}")
     capture = cv2.VideoCapture(input_video_file)
 
     # print error message if opening video failed
     if not capture.isOpened():
             print(f"Error opening video: {input_video_file}")
+            return None
             
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -106,7 +179,7 @@ def GenerateScreencaps(input_video_file):
 
     if num_frames < 1: 
         print("No frames in video {}".format(input_video_file))
-        return
+        return None
 
     # Prompt the user for the number of images they want to generate
     # num_images = int(input('How many images do you want to generate? '))
@@ -168,16 +241,25 @@ def GenerateScreencaps(input_video_file):
                     ).rgbSwapped()
                 )
     
+    # Save to database
+    db.save_screencap(input_video_file, pixmap_to_base64(q_img))
+    
     screencap = Label(
-    q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), input_video_file
+        q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
+        input_video_file
     )
-    return  screencap
+    return screencap
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Screencap Viewer")
         self.setGeometry(100, 100, 1200, 800)
+
+        # Initialize database
+        db_path = os.environ.get('META_DB_PATH', 'screencaps.db')
+        print("Using database path:", db_path)
+        self.db = ScreencapDatabase(db_path)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -197,7 +279,7 @@ class MainWindow(QMainWindow):
 
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory", "D:/awan/iCloudDrive/CloudData/Settings/Config/Google/UserSettings/Mapdata")
-
+        
         if folder:
             self.displayScreencaps(folder)
 
@@ -213,7 +295,7 @@ class MainWindow(QMainWindow):
 
         screencaps = []
         for video_file in tqdm(video_files, desc="Generating screencaps"):
-            screencap = GenerateScreencaps(video_file)
+            screencap = GenerateScreencaps(video_file, self.db)
             if screencap:
                 screencaps.append(screencap)
         for screencap in screencaps:
