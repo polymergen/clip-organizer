@@ -21,6 +21,66 @@ import numpy as np
 import subprocess
 from tqdm import tqdm
 
+def decode_anagram_filename(filename):
+    """
+    Decode anagram filename by looking up in the anagram record file.
+    Uses the same logic as the PowerShell reverse_anagram_file.ps1
+    """
+    try:
+        # Get the anagram file path from environment variable
+        record_file = os.environ.get('ANAGRAM_FILE_PATH')
+        
+        if not record_file:
+            print(f"⚠️  ANAGRAM_FILE_PATH environment variable not set for file: {filename}")
+            return filename
+            
+        if not os.path.exists(record_file):
+            print(f"⚠️  Anagram file does not exist: {record_file}")
+            return filename
+        
+        print(f"✓ Using anagram file: {record_file}")
+        
+        # Remove file extension for processing
+        name_without_ext = os.path.splitext(filename)[0]
+        extension = os.path.splitext(filename)[1]
+        
+        # Read the anagram record file
+        with open(record_file, 'r', encoding='utf-8') as f:
+            records = f.readlines()
+            
+        print(f"Finding anagram for: '{name_without_ext}'")
+        print(f"ANAGRAM_FILE_PATH: {record_file}")
+        print(f"File has {len(records)} records")
+        
+        # Look for the anagram in the records
+        for i, record in enumerate(records):
+            record = record.strip()
+            if ',' in record:
+                parts = record.split(',', 1)  # Split only on first comma
+                if len(parts) == 2:
+                    original_name, anagram = parts[0].strip(), parts[1].strip()
+                    print(f"Record {i+1}: original='{original_name}', anagram='{anagram}'")
+                    
+                    # Check if the anagram matches our filename (without extension)
+                    if anagram == name_without_ext:
+                        print(f"✓ EXACT MATCH FOUND! Returning: {original_name + extension}")
+                        return original_name + extension
+                else:
+                    print(f"Record {i+1}: Invalid format (no comma): '{record}'")
+            else:
+                print(f"Record {i+1}: Skipping empty/invalid line: '{record}'")
+        
+        # If no match found, return original filename
+        print(f"❌ No anagram found for: '{name_without_ext}'")
+        return filename
+        
+    except Exception as e:
+        # If any error occurs, return original filename
+        print(f"❌ Error decoding anagram for '{filename}': {e}")
+        return filename
+        # If any error occurs, return original filename
+        return filename
+
 
 
 SCREENCAP_HEIGHT = 800
@@ -40,12 +100,12 @@ class ScreencapDatabase:
             CREATE TABLE IF NOT EXISTS screencaps (
                 file_path TEXT PRIMARY KEY,
                 image_data TEXT NOT NULL,
+                file_size INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         conn.commit()
         conn.close()
-    
     def get_screencap(self, file_path):
         """Get screencap from database by file path."""
         conn = sqlite3.connect(self.db_path)
@@ -59,18 +119,66 @@ class ScreencapDatabase:
         """Save screencap to database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        
+        # Get file size if file exists
+        file_size = 0
+        try:
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+        except Exception:
+            pass
+            
         cursor.execute('''
-            INSERT OR REPLACE INTO screencaps (file_path, image_data) 
-            VALUES (?, ?)
-        ''', (file_path, image_data))
+            INSERT OR REPLACE INTO screencaps (file_path, image_data, file_size) 
+            VALUES (?, ?, ?)
+        ''', (file_path, image_data, file_size))
         conn.commit()
         conn.close()
+    
+    def get_database_size(self):
+        """Get the size of the database file in MB."""
+        try:
+            return os.path.getsize(self.db_path) / (1024 * 1024)
+        except Exception:
+            return 0
+    
+    def cleanup_old_entries(self, days=30):
+        """Remove entries older than specified days."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            DELETE FROM screencaps 
+            WHERE created_at < datetime('now', '-{} days')
+        '''.format(days))
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return deleted
 
-def pixmap_to_base64(pixmap):
-    """Convert QPixmap to base64 encoded string."""
+def pixmap_to_base64_compressed(pixmap, max_size=400, quality=75):
+    """Convert QPixmap to compressed base64 encoded string with adaptive compression."""
+    # Determine compression level based on original size
+    original_area = pixmap.width() * pixmap.height()
+    
+    # Use more aggressive compression for larger images
+    if original_area > 2000000:  # > 2 megapixels
+        max_size = 300
+        quality = 60
+    elif original_area > 1000000:  # > 1 megapixel
+        max_size = 350
+        quality = 65
+    elif original_area > 500000:  # > 0.5 megapixels
+        max_size = 400
+        quality = 70
+    
+    # Resize the pixmap to reduce size
+    if pixmap.width() > max_size or pixmap.height() > max_size:
+        pixmap = pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    
     buffer = QBuffer()
     buffer.open(QBuffer.WriteOnly)
-    pixmap.save(buffer, "PNG")
+    # Use JPEG format with quality compression
+    pixmap.save(buffer, "JPEG", quality)
     image_data = buffer.data().data()
     return base64.b64encode(image_data).decode('utf-8')
 
@@ -81,14 +189,50 @@ def base64_to_pixmap(base64_string):
     pixmap.loadFromData(image_data)
     return pixmap
 
-class Label(QLabel):
+class Label(QWidget):
     def __init__(self, pixmap, file_path, parent=None):
         super().__init__(parent)
-        self.setPixmap(pixmap)
         self.file_path = file_path
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        
+        # Create layout for image and filename
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+        
+        # Create image label
+        self.image_label = QLabel()
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.image_label)
+        
+        # Create filename label
+        filename = os.path.basename(file_path)
+        decoded_filename = decode_anagram_filename(filename)
+        
+        self.filename_label = QLabel(decoded_filename)
+        self.filename_label.setAlignment(Qt.AlignCenter)
+        self.filename_label.setWordWrap(True)
+        self.filename_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #333;
+                background-color: rgba(255, 255, 255, 180);
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 2px;
+                margin: 1px;
+            }
+        """)
+        layout.addWidget(self.filename_label)
+        
+        # Set size policy
+        self.setSizePolicy(QLabel().sizePolicy())
 
+    def setPixmap(self, pixmap):
+        """Compatibility method for existing code"""
+        self.image_label.setPixmap(pixmap)
 
     def show_context_menu(self, position):
         context_menu = QMenu(self)
@@ -150,11 +294,10 @@ def GenerateScreencaps(input_video_file, db):
                         output_image_width,
                         output_image_height,
                         bytes_per_line,
-                        QImage.Format_RGB888,
-                    ).rgbSwapped()
+                        QImage.Format_RGB888,                    ).rgbSwapped()
                 )
             # Save to database
-            db.save_screencap(input_video_file, pixmap_to_base64(q_img))
+            db.save_screencap(input_video_file, pixmap_to_base64_compressed(q_img))
             
             screencap = Label(
                 q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
@@ -170,8 +313,8 @@ def GenerateScreencaps(input_video_file, db):
 
     # print error message if opening video failed
     if not capture.isOpened():
-            print(f"Error opening video: {input_video_file}")
-            return None
+        print(f"Error opening video: {input_video_file}")
+        return None
             
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -232,17 +375,17 @@ def GenerateScreencaps(input_video_file, db):
     # cv2.waitKey(0)
 
     q_img = QPixmap.fromImage(
-                    QImage(
-                        output_image.data,
-                        output_image_width,
-                        output_image_height,
-                        bytes_per_line,
-                        QImage.Format_RGB888,
-                    ).rgbSwapped()
-                )
+        QImage(
+            output_image.data,
+            output_image_width,
+            output_image_height,
+            bytes_per_line,
+            QImage.Format_RGB888,
+        ).rgbSwapped()
+    )
     
     # Save to database
-    db.save_screencap(input_video_file, pixmap_to_base64(q_img))
+    db.save_screencap(input_video_file, pixmap_to_base64_compressed(q_img))
     
     screencap = Label(
         q_img.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
@@ -254,12 +397,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Screencap Viewer")
-        self.setGeometry(100, 100, 1200, 800)
-
-        # Initialize database
+        self.setGeometry(100, 100, 1200, 800)        # Initialize database
         db_path = os.environ.get('META_DB_PATH', 'screencaps.db')
-        print("Using database path:", db_path)
+        print(f"Using database path: {db_path}")
         self.db = ScreencapDatabase(db_path)
+        
+        # Print database info
+        db_size = self.db.get_database_size()
+        print(f"Database size: {db_size:.2f} MB")
+        
+        # Cleanup old entries if database is getting large
+        if db_size > 100:  # If database is over 100MB
+            deleted = self.db.cleanup_old_entries(30)
+            print(f"Cleaned up {deleted} old entries from database")
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
