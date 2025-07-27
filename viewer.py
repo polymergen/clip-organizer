@@ -2,6 +2,7 @@ import sys
 import os
 import sqlite3
 import base64
+import argparse
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -21,6 +22,14 @@ import numpy as np
 import subprocess
 from tqdm import tqdm
 
+# Global debug flag
+DEBUG_MODE = False
+
+def debug_print(*args, **kwargs):
+    """Print only if debug mode is enabled."""
+    if DEBUG_MODE:
+        print(*args, **kwargs)
+
 def decode_anagram_filename(filename):
     """
     Decode anagram filename by looking up in the anagram record file.
@@ -31,14 +40,14 @@ def decode_anagram_filename(filename):
         record_file = os.environ.get('ANAGRAM_FILE_PATH')
         
         if not record_file:
-            print(f"⚠️  ANAGRAM_FILE_PATH environment variable not set for file: {filename}")
+            debug_print(f"⚠️  ANAGRAM_FILE_PATH environment variable not set for file: {filename}")
             return filename
             
         if not os.path.exists(record_file):
-            print(f"⚠️  Anagram file does not exist: {record_file}")
+            debug_print(f"⚠️  Anagram file does not exist: {record_file}")
             return filename
         
-        print(f"✓ Using anagram file: {record_file}")
+        debug_print(f"✓ Using anagram file: {record_file}")
         
         # Remove file extension for processing
         name_without_ext = os.path.splitext(filename)[0]
@@ -48,9 +57,9 @@ def decode_anagram_filename(filename):
         with open(record_file, 'r', encoding='utf-8') as f:
             records = f.readlines()
             
-        print(f"Finding anagram for: '{name_without_ext}'")
-        print(f"ANAGRAM_FILE_PATH: {record_file}")
-        print(f"File has {len(records)} records")
+        debug_print(f"Finding anagram for: '{name_without_ext}'")
+        debug_print(f"ANAGRAM_FILE_PATH: {record_file}")
+        debug_print(f"File has {len(records)} records")
         
         # Look for the anagram in the records
         for i, record in enumerate(records):
@@ -59,26 +68,24 @@ def decode_anagram_filename(filename):
                 parts = record.split(',', 1)  # Split only on first comma
                 if len(parts) == 2:
                     original_name, anagram = parts[0].strip(), parts[1].strip()
-                    print(f"Record {i+1}: original='{original_name}', anagram='{anagram}'")
+                    debug_print(f"Record {i+1}: original='{original_name}', anagram='{anagram}'")
                     
                     # Check if the anagram matches our filename (without extension)
                     if anagram == name_without_ext:
-                        print(f"✓ EXACT MATCH FOUND! Returning: {original_name + extension}")
+                        debug_print(f"✓ EXACT MATCH FOUND! Returning: {original_name + extension}")
                         return original_name + extension
                 else:
-                    print(f"Record {i+1}: Invalid format (no comma): '{record}'")
+                    debug_print(f"Record {i+1}: Invalid format (no comma): '{record}'")
             else:
-                print(f"Record {i+1}: Skipping empty/invalid line: '{record}'")
+                debug_print(f"Record {i+1}: Skipping empty/invalid line: '{record}'")
         
         # If no match found, return original filename
-        print(f"❌ No anagram found for: '{name_without_ext}'")
+        debug_print(f"❌ No anagram found for: '{name_without_ext}'")
         return filename
         
     except Exception as e:
         # If any error occurs, return original filename
-        print(f"❌ Error decoding anagram for '{filename}': {e}")
-        return filename
-        # If any error occurs, return original filename
+        debug_print(f"❌ Error decoding anagram for '{filename}': {e}")
         return filename
 
 
@@ -272,7 +279,7 @@ def GenerateScreencaps(input_video_file, db):
     # First check if screencap exists in database
     cached_data = db.get_screencap(input_video_file)
     if cached_data:
-        print(f"Using cached screencap for {input_video_file}")
+        debug_print(f"Using cached screencap for {input_video_file}")
         cached_pixmap = base64_to_pixmap(cached_data)
         screencap = Label(
             cached_pixmap.scaled(SCREENCAP_WIDTH, SCREENCAP_HEIGHT, Qt.KeepAspectRatio), 
@@ -308,7 +315,7 @@ def GenerateScreencaps(input_video_file, db):
         pass
     
     # If image reading failed, try video processing
-    print(f"Generating screencap for video: {input_video_file}")
+    debug_print(f"Generating screencap for video: {input_video_file}")
     capture = cv2.VideoCapture(input_video_file)
 
     # print error message if opening video failed
@@ -318,10 +325,10 @@ def GenerateScreencaps(input_video_file, db):
             
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    # print(f"Num frames: {num_frames}")
+    # debug_print(f"Num frames: {num_frames}")
 
     if num_frames < 1: 
-        print("No frames in video {}".format(input_video_file))
+        debug_print("No frames in video {}".format(input_video_file))
         return None
 
     # Prompt the user for the number of images they want to generate
@@ -397,19 +404,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Screencap Viewer")
-        self.setGeometry(100, 100, 1200, 800)        # Initialize database
+        self.setGeometry(100, 100, 1200, 800)
+        # Initialize database
         db_path = os.environ.get('META_DB_PATH', 'screencaps.db')
-        print(f"Using database path: {db_path}")
+        debug_print(f"Using database path: {db_path}")
         self.db = ScreencapDatabase(db_path)
         
         # Print database info
         db_size = self.db.get_database_size()
-        print(f"Database size: {db_size:.2f} MB")
+        debug_print(f"Database size: {db_size:.2f} MB")
         
         # Cleanup old entries if database is getting large
         if db_size > 100:  # If database is over 100MB
             deleted = self.db.cleanup_old_entries(30)
-            print(f"Cleaned up {deleted} old entries from database")
+            debug_print(f"Cleaned up {deleted} old entries from database")
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -464,6 +472,14 @@ class MainWindow(QMainWindow):
         return video_files
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Screencap Viewer')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    args = parser.parse_args()
+    
+    # Set global debug flag
+    DEBUG_MODE = args.debug
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

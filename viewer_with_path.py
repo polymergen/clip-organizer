@@ -1,6 +1,7 @@
 # filepath: d:\codes_native_windows\ClipOrganizer\viewer_with_path.py
 import sys
 import os
+import argparse
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -21,19 +22,123 @@ import subprocess
 from tqdm import tqdm
 import pickle
 
+# Global debug flag
+DEBUG_MODE = False
+
+def debug_print(*args, **kwargs):
+    """Print only if debug mode is enabled."""
+    if DEBUG_MODE:
+        print(*args, **kwargs)
+
+def decode_anagram_filename(filename):
+    """
+    Decode anagram filename by looking up in the anagram record file.
+    Uses the same logic as the PowerShell reverse_anagram_file.ps1
+    """
+    try:
+        # Get the anagram file path from environment variable
+        record_file = os.environ.get('ANAGRAM_FILE_PATH')
+        
+        if not record_file:
+            debug_print(f"⚠️  ANAGRAM_FILE_PATH environment variable not set for file: {filename}")
+            return filename
+            
+        if not os.path.exists(record_file):
+            debug_print(f"⚠️  Anagram file does not exist: {record_file}")
+            return filename
+        
+        debug_print(f"✓ Using anagram file: {record_file}")
+        
+        # Remove file extension for processing
+        name_without_ext = os.path.splitext(filename)[0]
+        extension = os.path.splitext(filename)[1]
+        
+        # Read the anagram record file
+        with open(record_file, 'r', encoding='utf-8') as f:
+            records = f.readlines()
+            
+        debug_print(f"Finding anagram for: '{name_without_ext}'")
+        debug_print(f"ANAGRAM_FILE_PATH: {record_file}")
+        debug_print(f"File has {len(records)} records")
+        
+        # Look for the anagram in the records
+        for i, record in enumerate(records):
+            record = record.strip()
+            if ',' in record:
+                parts = record.split(',', 1)  # Split only on first comma
+                if len(parts) == 2:
+                    original_name, anagram = parts[0].strip(), parts[1].strip()
+                    debug_print(f"Record {i+1}: original='{original_name}', anagram='{anagram}'")
+                    
+                    # Check if the anagram matches our filename (without extension)
+                    if anagram == name_without_ext:
+                        debug_print(f"✓ EXACT MATCH FOUND! Returning: {original_name + extension}")
+                        return original_name + extension
+                    
+                else:
+                    debug_print(f"Record {i+1}: Invalid format (no comma): '{record}'")
+            else:
+                debug_print(f"Record {i+1}: Skipping empty/invalid line: '{record}'")
+        
+        # If no match found, return original filename
+        debug_print(f"❌ No anagram found for: '{name_without_ext}'")
+        return filename
+        
+    except Exception as e:
+        # If any error occurs, return original filename
+        debug_print(f"❌ Error decoding anagram for '{filename}': {e}")
+        return filename
+
 
 
 SCREENCAP_HEIGHT = 800
 SCREENCAP_WIDTH = 800
 SCREENCAP_FRAME_COUNT = 9
 
-class Label(QLabel):
+class Label(QWidget):
     def __init__(self, pixmap, file_path, parent=None):
         super().__init__(parent)
-        self.setPixmap(pixmap)
         self.file_path = file_path
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        
+        # Create layout for image and filename
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+        
+        # Create image label
+        self.image_label = QLabel()
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.image_label)
+        
+        # Create filename label
+        filename = os.path.basename(file_path)
+        decoded_filename = decode_anagram_filename(filename)
+        
+        self.filename_label = QLabel(decoded_filename)
+        self.filename_label.setAlignment(Qt.AlignCenter)
+        self.filename_label.setWordWrap(True)
+        self.filename_label.setStyleSheet("""
+            QLabel {
+                font-size: 28px;
+                color: #333;
+                background-color: rgba(255, 255, 255, 180);
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 2px;
+                margin: 1px;
+            }
+        """)
+        layout.addWidget(self.filename_label)
+        
+        # Set size policy
+        self.setSizePolicy(QLabel().sizePolicy())
+
+    def setPixmap(self, pixmap):
+        """Compatibility method for existing code"""
+        self.image_label.setPixmap(pixmap)
 
 
     def show_context_menu(self, position):
@@ -101,10 +206,10 @@ def GenerateScreencaps(input_video_file):
             
     # Get the number of frames in the video
     num_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    # print(f"Num frames: {num_frames}")
+    # debug_print(f"Num frames: {num_frames}")
 
     if num_frames < 1: 
-        print("No frames in video {}".format(input_video_file))
+        debug_print("No frames in video {}".format(input_video_file))
         return
 
     # Prompt the user for the number of images they want to generate
@@ -195,10 +300,10 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.scroll_area)
         
         # Check if command line argument was passed
-        if len(sys.argv) > 1:
-            folder_path = sys.argv[1]
+        if len(sys.argv) > 2:  # Changed from >1 to >2 to account for --debug flag
+            folder_path = sys.argv[-1]  # Use last argument as folder path
             if os.path.isdir(folder_path):
-                print(f"Using folder path from command line: {folder_path}")
+                debug_print(f"Using folder path from command line: {folder_path}")
                 self.displayScreencaps(folder_path)
             else:
                 print(f"Warning: Provided path is not a valid directory: {folder_path}")
@@ -240,7 +345,22 @@ class MainWindow(QMainWindow):
         return video_files
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Screencap Viewer with Path')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('folder_path', nargs='?', help='Folder path to display screencaps from')
+    args = parser.parse_args()
+    
+    # Set global debug flag
+    DEBUG_MODE = args.debug
+    
     app = QApplication(sys.argv)
     window = MainWindow()
+    
+    # If folder path provided via argument parser, use it
+    if args.folder_path and os.path.isdir(args.folder_path):
+        debug_print(f"Using folder path from arguments: {args.folder_path}")
+        window.displayScreencaps(args.folder_path)
+    
     window.show()
     sys.exit(app.exec_())
