@@ -376,6 +376,11 @@ class MainWindow(QMainWindow):
         self.result_label.setFixedWidth(120)
         top_bar.addWidget(self.result_label)
 
+        # Add SRC button to open a specific folder
+        self.src_button = QPushButton("SRC")
+        self.src_button.clicked.connect(self.open_src_folder)
+        top_bar.addWidget(self.src_button)
+
         main_layout.addLayout(top_bar)
 
         self.scroll_area = QScrollArea()
@@ -389,6 +394,9 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
         if folder:
             self.displayScreencaps(folder)
+
+    def open_src_folder(self):
+        self.displayScreencaps("C:\\Users\\ScriptKiddie\\My Drive\\Faecs")
 
     def resizeEvent(self, event):
         if self.current_folder and self.screencaps:
