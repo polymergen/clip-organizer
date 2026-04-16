@@ -17,6 +17,8 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QMenu,
     QSizePolicy,
+    QCheckBox,
+    QStyle,
 )
 from PyQt5.QtGui import QPixmap, QDrag, QImage
 from PyQt5.QtCore import Qt, QBuffer, QMimeData, pyqtSignal
@@ -148,7 +150,7 @@ def base64_to_pixmap(base64_string):
     return pixmap
 
 class Label(QWidget):
-    def __init__(self, pixmap, file_path, parent=None):
+    def __init__(self, pixmap, file_path, show_original=False, parent=None):
         super(Label, self).__init__(parent)
         self.original_pixmap = pixmap
         self.file_path = file_path
@@ -167,9 +169,10 @@ class Label(QWidget):
         layout.addWidget(self.image_label)
 
         filename = os.path.basename(file_path)
-        decoded_filename = decode_anagram_filename(filename)
-        self.decoded_filename = decoded_filename  # stored for search filtering
-        self.filename_label = QLabel(decoded_filename)
+        self.anagram_filename = filename
+        self.decoded_filename = decode_anagram_filename(filename)
+        display = self.decoded_filename if show_original else self.anagram_filename
+        self.filename_label = QLabel(display)
         self.filename_label.setAlignment(Qt.AlignCenter)
         self.filename_label.setWordWrap(True)
         self.filename_label.setStyleSheet(
@@ -194,6 +197,9 @@ class Label(QWidget):
             )
             self.image_label.setPixmap(scaled)
         super(Label, self).resizeEvent(event)
+
+    def update_display(self, show_original):
+        self.filename_label.setText(self.decoded_filename if show_original else self.anagram_filename)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -238,6 +244,130 @@ class Label(QWidget):
         except Exception:
             self.setToolTip(self.file_path)
         super(Label, self).enterEvent(event)
+
+
+class FolderWidget(QWidget):
+    folder_clicked = pyqtSignal(str)
+
+    def __init__(self, folder_path, show_original=False, parent=None):
+        super(FolderWidget, self).__init__(parent)
+        self.folder_path = folder_path
+        raw_name = os.path.basename(folder_path)
+        self.anagram_name = raw_name
+        self.decoded_name = decode_anagram_filename(raw_name)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(
+            QApplication.style().standardIcon(QStyle.SP_DirIcon).pixmap(64, 64)
+        )
+        icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_label)
+
+        display = self.decoded_name if show_original else self.anagram_name
+        self.name_label = QLabel(display)
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setStyleSheet(
+            "QLabel { font-size: 10px; color: #333;"
+            " background-color: rgba(255,255,255,180);"
+            " border: 1px solid #ccc; border-radius: 3px;"
+            " padding: 2px; margin: 1px; }"
+        )
+        layout.addWidget(self.name_label)
+
+    def update_display(self, show_original):
+        self.name_label.setText(self.decoded_name if show_original else self.anagram_name)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.folder_clicked.emit(self.folder_path)
+
+    def show_context_menu(self, position):
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copy Path")
+        action = menu.exec_(self.mapToGlobal(position))
+        if action == copy_action:
+            QApplication.clipboard().setText(self.folder_path.replace('/', '\\'))
+
+    def enterEvent(self, event):
+        self.setToolTip(self.folder_path)
+        super(FolderWidget, self).enterEvent(event)
+
+
+class VideoPlaceholder(QWidget):
+    def __init__(self, file_path, show_original=False, parent=None):
+        super(VideoPlaceholder, self).__init__(parent)
+        self.file_path = file_path
+        filename = os.path.basename(file_path)
+        self.anagram_filename = filename
+        self.decoded_filename = decode_anagram_filename(filename)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+
+        icon_label = QLabel("▶")
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet("font-size: 28px; color: #666;")
+        layout.addWidget(icon_label)
+
+        display = self.decoded_filename if show_original else self.anagram_filename
+        self.name_label = QLabel(display)
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setStyleSheet(
+            "QLabel { font-size: 10px; color: #333;"
+            " background-color: rgba(255,255,255,180);"
+            " border: 1px solid #ccc; border-radius: 3px;"
+            " padding: 2px; margin: 1px; }"
+        )
+        layout.addWidget(self.name_label)
+
+    def update_display(self, show_original):
+        self.name_label.setText(self.decoded_filename if show_original else self.anagram_filename)
+
+    def show_context_menu(self, position):
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copy Path")
+        play_action = menu.addAction("Play")
+        action = menu.exec_(self.mapToGlobal(position))
+        if action == copy_action:
+            QApplication.clipboard().setText(self.file_path.replace('/', '\\'))
+        elif action == play_action:
+            self.play_video()
+
+    def play_video(self):
+        try:
+            subprocess.Popen(['mpv', self.file_path])
+        except FileNotFoundError:
+            print("Error: mpv is not installed or not in PATH")
+
+    def enterEvent(self, event):
+        try:
+            size = os.path.getsize(self.file_path)
+            if size < 1024:
+                size_str = str(size) + " B"
+            elif size < 1048576:
+                size_str = "{:.2f} KB".format(size / 1024.0)
+            elif size < 1073741824:
+                size_str = "{:.2f} MB".format(size / 1048576.0)
+            else:
+                size_str = "{:.2f} GB".format(size / 1073741824.0)
+            self.setToolTip(self.file_path + "  [" + size_str + "]")
+        except Exception:
+            self.setToolTip(self.file_path)
+        super(VideoPlaceholder, self).enterEvent(event)
 
 
 class DropArea(QLabel):
@@ -355,17 +485,47 @@ class MainWindow(QMainWindow):
             debug_print("Cleaned {} old DB entries".format(deleted))
 
         self.current_folder = None
-        self.screencaps = []
+        self.nav_history = []
+        self.all_widgets = []
+        self.show_original = False
+        self.screencaps_loaded = False
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
 
-        # Top bar: folder button + search box + result count
+        # Navigation bar: Back + path label + Copy Path
+        nav_bar = QHBoxLayout()
+        self.back_button = QPushButton("← Back")
+        self.back_button.clicked.connect(self._go_back)
+        self.back_button.setEnabled(False)
+        nav_bar.addWidget(self.back_button)
+
+        self.path_label = QLabel("No folder selected")
+        self.path_label.setStyleSheet(
+            "QLabel { background: #f0f0f0; border: 1px solid #ccc;"
+            " border-radius: 3px; padding: 3px 6px; }"
+        )
+        self.path_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        nav_bar.addWidget(self.path_label)
+
+        copy_path_btn = QPushButton("Copy Path")
+        copy_path_btn.clicked.connect(self._copy_current_path)
+        nav_bar.addWidget(copy_path_btn)
+
+        main_layout.addLayout(nav_bar)
+
+        # Top bar: folder button + show screencaps + search + result count + checkbox + SRC
         top_bar = QHBoxLayout()
+
         self.select_folder_button = QPushButton("Select Folder")
         self.select_folder_button.clicked.connect(self.selectFolder)
         top_bar.addWidget(self.select_folder_button)
+
+        self.show_screencaps_button = QPushButton("Show Screencaps")
+        self.show_screencaps_button.clicked.connect(self._show_screencaps_for_folder)
+        self.show_screencaps_button.setEnabled(False)
+        top_bar.addWidget(self.show_screencaps_button)
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search by filename...")
@@ -376,7 +536,11 @@ class MainWindow(QMainWindow):
         self.result_label.setFixedWidth(120)
         top_bar.addWidget(self.result_label)
 
-        # Add SRC button to open a specific folder
+        self.original_names_checkbox = QCheckBox("Show Original Names")
+        self.original_names_checkbox.setChecked(False)
+        self.original_names_checkbox.stateChanged.connect(self._on_original_names_toggled)
+        top_bar.addWidget(self.original_names_checkbox)
+
         self.src_button = QPushButton("SRC")
         self.src_button.clicked.connect(self.open_src_folder)
         top_bar.addWidget(self.src_button)
@@ -393,65 +557,154 @@ class MainWindow(QMainWindow):
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
         if folder:
-            self.displayScreencaps(folder)
+            self.nav_history.clear()
+            self._navigate_to(folder)
 
     def open_src_folder(self):
-        self.displayScreencaps("C:\\Users\\ScriptKiddie\\My Drive\\Faecs")
+        self.nav_history.clear()
+        self._navigate_to("C:\\Users\\ScriptKiddie\\My Drive\\Faecs")
+
+    def _go_back(self):
+        if self.nav_history:
+            folder = self.nav_history.pop()
+            self._load_folder(folder)
+            self._update_nav_ui()
+
+    def _navigate_to(self, folder):
+        if self.current_folder:
+            self.nav_history.append(self.current_folder)
+        self._load_folder(folder)
+        self._update_nav_ui()
+
+    def _update_nav_ui(self):
+        self.back_button.setEnabled(bool(self.nav_history))
+        self.path_label.setText(self.current_folder or "No folder selected")
+
+    def _copy_current_path(self):
+        if self.current_folder:
+            QApplication.clipboard().setText(self.current_folder.replace('/', '\\'))
+
+    def _load_folder(self, folder):
+        self.current_folder = folder
+        self.screencaps_loaded = False
+        self.search_box.blockSignals(True)
+        self.search_box.clear()
+        self.search_box.blockSignals(False)
+        self._clear_grid()
+        self.all_widgets = []
+
+        try:
+            entries = os.listdir(folder)
+        except PermissionError:
+            return
+
+        folders = sorted([e for e in entries if os.path.isdir(os.path.join(folder, e))])
+        files = sorted([e for e in entries if os.path.isfile(os.path.join(folder, e))])
+
+        for folder_name in folders:
+            fp = os.path.join(folder, folder_name)
+            fw = FolderWidget(fp, show_original=self.show_original)
+            fw.folder_clicked.connect(self._navigate_to)
+            self.all_widgets.append(fw)
+
+        for file_name in files:
+            fp = os.path.join(folder, file_name)
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in IMAGE_EXTENSIONS:
+                cached = self.db.get_screencap(fp)
+                if cached:
+                    pixmap = base64_to_pixmap(cached)
+                else:
+                    pixmap = QPixmap(fp)
+                    if pixmap.isNull():
+                        try:
+                            cv_img = cv2.imread(fp)
+                            if cv_img is not None:
+                                h, w_px = cv_img.shape[:2]
+                                pixmap = QPixmap.fromImage(
+                                    QImage(cv_img.data, w_px, h, 3 * w_px,
+                                           QImage.Format_RGB888).rgbSwapped()
+                                )
+                        except Exception:
+                            pass
+                    if not pixmap.isNull():
+                        self.db.save_screencap(fp, pixmap_to_base64_compressed(pixmap))
+                if not pixmap.isNull():
+                    lbl = Label(pixmap, fp, show_original=self.show_original)
+                    self.all_widgets.append(lbl)
+                    continue
+            vp = VideoPlaceholder(fp, show_original=self.show_original)
+            self.all_widgets.append(vp)
+
+        has_videos = any(isinstance(w, VideoPlaceholder) for w in self.all_widgets)
+        self.show_screencaps_button.setEnabled(has_videos)
+        self.updateLayout()
+
+    def _show_screencaps_for_folder(self):
+        if self.screencaps_loaded:
+            return
+        self.screencaps_loaded = True
+        self.show_screencaps_button.setEnabled(False)
+        for i, w in enumerate(self.all_widgets):
+            if isinstance(w, VideoPlaceholder):
+                label = GenerateMedia(w.file_path, self.db)
+                if label is not None:
+                    label.update_display(self.show_original)
+                    self.all_widgets[i] = label
+        self.updateLayout()
 
     def resizeEvent(self, event):
-        if self.current_folder and self.screencaps:
+        if self.current_folder:
             self.updateLayout()
         super(MainWindow, self).resizeEvent(event)
 
     def _on_search_changed(self, text):
         self.updateLayout()
 
-    def updateLayout(self):
+    def _on_original_names_toggled(self, state):
+        self.show_original = (state == Qt.Checked)
+        for w in self.all_widgets:
+            if hasattr(w, 'update_display'):
+                w.update_display(self.show_original)
+        self.updateLayout()
+
+    def _clear_grid(self):
         for i in reversed(range(self.scroll_area_layout.count())):
-            w = self.scroll_area_layout.itemAt(i).widget()
-            if w:
-                self.scroll_area_layout.removeWidget(w)
-                w.setParent(None)
+            item = self.scroll_area_layout.itemAt(i)
+            if item:
+                widget = item.widget()
+                if widget:
+                    self.scroll_area_layout.removeWidget(widget)
+                    widget.setParent(None)
 
+    def updateLayout(self):
+        self._clear_grid()
         term = self.search_box.text().lower()
-        visible = [
-            s for s in self.screencaps
-            if term in s.decoded_filename.lower()
-        ] if term else self.screencaps
 
-        self.result_label.setText(
-            "{}/{} files".format(len(visible), len(self.screencaps))
-        )
+        def matches(w):
+            if not term:
+                return True
+            if isinstance(w, FolderWidget):
+                return (term in w.anagram_name.lower() or term in w.decoded_name.lower())
+            if hasattr(w, 'anagram_filename'):
+                return (term in w.anagram_filename.lower() or term in w.decoded_filename.lower())
+            return True
+
+        visible = [w for w in self.all_widgets if matches(w)]
+        self.result_label.setText("{}/{} items".format(len(visible), len(self.all_widgets)))
 
         available_width = self.scroll_area.width() - 30
         num_cols = max(1, min(5, available_width // 250))
         thumb_width = (available_width // num_cols) - 20
-        for idx, screencap in enumerate(visible):
+        for idx, widget in enumerate(visible):
             row, col = divmod(idx, num_cols)
-            self.scroll_area_layout.addWidget(screencap, row, col)
-            screencap.setMinimumSize(thumb_width, thumb_width)
-            screencap.setMaximumSize(thumb_width * 2, thumb_width * 2)
+            self.scroll_area_layout.addWidget(widget, row, col)
+            widget.setMinimumSize(thumb_width, thumb_width)
+            widget.setMaximumSize(thumb_width * 2, thumb_width * 2)
 
     def displayScreencaps(self, folder):
-        self.current_folder = folder
-        self.search_box.blockSignals(True)
-        self.search_box.clear()
-        self.search_box.blockSignals(False)
-        for i in reversed(range(self.scroll_area_layout.count())):
-            w = self.scroll_area_layout.itemAt(i).widget()
-            if w:
-                self.scroll_area_layout.removeWidget(w)
-                w.setParent(None)
-        files = []
-        for root, _, filenames in os.walk(folder):
-            for f in filenames:
-                files.append(os.path.join(root, f))
-        self.screencaps = []
-        for f in tqdm(files, desc="Loading media"):
-            label = GenerateMedia(f, self.db)
-            if label:
-                self.screencaps.append(label)
-        self.updateLayout()
+        self.nav_history.clear()
+        self._navigate_to(folder)
 
 
 class VideoOrganizer(QMainWindow):
