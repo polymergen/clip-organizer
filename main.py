@@ -162,6 +162,14 @@ class Label(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(2)
 
+        cb_row = QHBoxLayout()
+        self.select_checkbox = QCheckBox()
+        self.select_checkbox.setFixedSize(18, 18)
+        self.select_checkbox.setToolTip("Select for deletion")
+        cb_row.addWidget(self.select_checkbox)
+        cb_row.addStretch()
+        layout.addLayout(cb_row)
+
         self.image_label = QLabel()
         self.image_label.setPixmap(pixmap)
         self.image_label.setAlignment(Qt.AlignCenter)
@@ -317,6 +325,14 @@ class VideoPlaceholder(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(2)
 
+        cb_row = QHBoxLayout()
+        self.select_checkbox = QCheckBox()
+        self.select_checkbox.setFixedSize(18, 18)
+        self.select_checkbox.setToolTip("Select for deletion")
+        cb_row.addWidget(self.select_checkbox)
+        cb_row.addStretch()
+        layout.addLayout(cb_row)
+
         icon_label = QLabel("▶")
         icon_label.setAlignment(Qt.AlignCenter)
         icon_label.setStyleSheet("font-size: 28px; color: #666;")
@@ -398,6 +414,45 @@ class DropArea(QLabel):
 
     def get_folder_name(self):
         return self._folder_name
+
+
+class TrashDropZone(QLabel):
+    file_deleted = pyqtSignal(str)
+
+    _NORMAL_STYLE = (
+        "QLabel { border: 2px dashed #e55; color: #c33; font-size: 14px;"
+        " background: #fff0f0; border-radius: 6px; }"
+    )
+    _HOVER_STYLE = (
+        "QLabel { border: 3px solid #e00; color: #900; font-size: 14px;"
+        " background: #ffe0e0; border-radius: 6px; }"
+    )
+
+    def __init__(self, parent=None):
+        super(TrashDropZone, self).__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setText("\U0001f5d1  Drop here to delete permanently")
+        self.setMinimumHeight(52)
+        self.setMaximumHeight(64)
+        self.setStyleSheet(self._NORMAL_STYLE)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            self.setStyleSheet(self._HOVER_STYLE)
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(self._NORMAL_STYLE)
+
+    def dropEvent(self, event):
+        self.setStyleSheet(self._NORMAL_STYLE)
+        file_path = event.mimeData().text()
+        try:
+            os.remove(file_path)
+            self.file_deleted.emit(file_path)
+        except Exception as e:
+            print("Could not delete file: " + str(e))
 
 
 def GenerateMedia(input_file, db):
@@ -545,6 +600,14 @@ class MainWindow(QMainWindow):
         self.src_button.clicked.connect(self.open_src_folder)
         top_bar.addWidget(self.src_button)
 
+        self.delete_selected_button = QPushButton("🗑 Delete Selected")
+        self.delete_selected_button.setStyleSheet(
+            "QPushButton { color: #c00; font-weight: bold; }"
+            "QPushButton:hover { background: #ffe0e0; }"
+        )
+        self.delete_selected_button.clicked.connect(self._delete_selected)
+        top_bar.addWidget(self.delete_selected_button)
+
         main_layout.addLayout(top_bar)
 
         self.scroll_area = QScrollArea()
@@ -553,6 +616,10 @@ class MainWindow(QMainWindow):
         self.scroll_area.setWidget(self.scroll_area_widget)
         self.scroll_area.setWidgetResizable(True)
         main_layout.addWidget(self.scroll_area)
+
+        self.trash_zone = TrashDropZone()
+        self.trash_zone.file_deleted.connect(self._on_file_deleted)
+        main_layout.addWidget(self.trash_zone)
 
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -701,6 +768,28 @@ class MainWindow(QMainWindow):
             self.scroll_area_layout.addWidget(widget, row, col)
             widget.setMinimumSize(thumb_width, thumb_width)
             widget.setMaximumSize(thumb_width * 2, thumb_width * 2)
+
+    def _on_file_deleted(self, file_path):
+        self.all_widgets = [
+            w for w in self.all_widgets
+            if getattr(w, 'file_path', None) != file_path
+        ]
+        self.updateLayout()
+
+    def _delete_selected(self):
+        to_delete = [
+            w for w in self.all_widgets
+            if hasattr(w, 'select_checkbox') and w.select_checkbox.isChecked()
+        ]
+        if not to_delete:
+            return
+        for w in to_delete:
+            try:
+                os.remove(w.file_path)
+                self.all_widgets.remove(w)
+            except Exception as e:
+                print("Could not delete: " + w.file_path + ": " + str(e))
+        self.updateLayout()
 
     def displayScreencaps(self, folder):
         self.nav_history.clear()
