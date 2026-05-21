@@ -3,6 +3,7 @@ import os
 import sqlite3
 import base64
 import argparse
+from typing import Optional, Tuple
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -19,16 +20,48 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QCheckBox,
     QStyle,
+    QComboBox,
 )
 from PyQt5.QtGui import QPixmap, QDrag, QImage
-from PyQt5.QtCore import Qt, QBuffer, QMimeData, pyqtSignal
+from PyQt5.QtCore import Qt, QBuffer, QMimeData, QUrl, pyqtSignal
 import cv2
 import numpy as np
 import subprocess
+import shutil
 from tqdm import tqdm
+
+# Ensure the sibling CategorizerProject path is available for shared utilities.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CATEGORIZER_PROJECT_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, '..', 'CategorizerProject'))
+if os.path.isdir(CATEGORIZER_PROJECT_DIR) and CATEGORIZER_PROJECT_DIR not in sys.path:
+    sys.path.insert(0, CATEGORIZER_PROJECT_DIR)
+
+from anagram_util import get_original_name, convert_to_anagram, add_anagram_record
 
 # Global debug flag
 DEBUG_MODE = False
+
+
+def natural_sort_key(s):
+    """Key for natural alphanumeric sort: 'file10' sorts after 'file9'."""
+    import re
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', s)]
+
+
+def _fmt_size(path):
+    """Return a human-readable file size string, or empty string on error."""
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        return ""
+    if size < 1024:
+        return str(size) + " B"
+    elif size < 1048576:
+        return "{:.1f} KB".format(size / 1024.0)
+    elif size < 1073741824:
+        return "{:.1f} MB".format(size / 1048576.0)
+    else:
+        return "{:.2f} GB".format(size / 1073741824.0)
 
 def debug_print(*args, **kwargs):
     if DEBUG_MODE:
@@ -59,6 +92,123 @@ def decode_anagram_filename(filename):
     except Exception as e:
         debug_print("Error decoding anagram for " + filename + ": " + str(e))
         return filename
+
+
+def generate_anagram_output_filename(input_video_path: str) -> str:
+    """
+    Generate an output filename with '-subbed' suffix using anagram logic.
+    
+    Flow:
+    1. Get the stem of the input file (without extension)
+    2. Reverse-anagram it to get the original name
+    3. Append '-subbed' to the original name
+    4. Convert the new name back to anagram form
+    5. Record the new anagram mapping
+    6. Return the anagrammed stem (caller adds extension and path)
+    """
+    try:
+        record_file = os.environ.get('ANAGRAM_FILE_PATH')
+        if not record_file:
+            debug_print("ANAGRAM_FILE_PATH not set; using simple -subbed suffix")
+            base, _ = os.path.splitext(input_video_path)
+            return os.path.basename(base) + "-subbed"
+        
+        if not os.path.exists(record_file):
+            debug_print("Anagram file not found; using simple -subbed suffix")
+            base, _ = os.path.splitext(input_video_path)
+            return os.path.basename(base) + "-subbed"
+        
+        # Get the stem (no extension) of the input file
+        input_stem = os.path.splitext(os.path.basename(input_video_path))[0]
+        input_ext = os.path.splitext(input_video_path)[1]
+        
+        # Reverse-anagram to get the original name
+        original_name = get_original_name(input_stem, record_file=record_file)
+        if not original_name:
+            original_name = input_stem
+        
+        # Append -subbed to the original name
+        new_original = original_name + "-subbed"
+        
+        # Convert back to anagram
+        new_anagram = convert_to_anagram(new_original)
+        
+        # Record the mapping
+        add_anagram_record(new_original, new_anagram, record_file=record_file)
+        
+        # Return just the anagrammed stem (caller will add extension)
+        return new_anagram
+    except Exception as e:
+        debug_print("Error generating anagram output filename: " + str(e))
+        base, ext = os.path.splitext(input_video_path)
+        return os.path.basename(base) + "-subbed"
+
+
+def get_ffmpeg_executable() -> Optional[str]:
+    """Return the ffmpeg executable path, preferring a known Chocolatey location."""
+    chocolatey_ffmpeg = r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"
+    if os.path.exists(chocolatey_ffmpeg):
+        return chocolatey_ffmpeg
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    return None
+
+
+def embed_subtitles_ffmpeg(input_video: str, subtitle_file: str, output_video: str) -> Tuple[bool, str]:
+    """
+    Embed a subtitle track into a video using ffmpeg.
+
+    Returns:
+        (success, error_message)
+    """
+    ffmpeg_executable = get_ffmpeg_executable()
+    if not ffmpeg_executable or not os.path.exists(ffmpeg_executable):
+        message = "ffmpeg executable not found at C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe and not available on PATH."
+        debug_print(message)
+        return False, message
+
+    cmd = [
+        ffmpeg_executable,
+        "-nostdin",
+        "-y",
+        "-i",
+        input_video,
+        "-i",
+        subtitle_file,
+        "-map",
+        "0",
+        "-map",
+        "1",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "mov_text",
+        output_video,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            error = result.stderr.strip() or result.stdout.strip() or "Unknown ffmpeg error"
+            debug_print("FFmpeg command failed: " + error)
+            return False, error
+        return True, ""
+    except FileNotFoundError:
+        message = f"FFmpeg executable not found: {ffmpeg_executable}"
+        debug_print(message)
+        return False, message
+    except subprocess.TimeoutExpired:
+        message = "FFmpeg timed out while embedding subtitles."
+        debug_print(message)
+        return False, message
+        return False, message
+    except Exception as e:
+        error = str(e)
+        debug_print("FFmpeg error: " + error)
+        return False, error
+
 
 SCREENCAP_HEIGHT = 800
 SCREENCAP_WIDTH = 800
@@ -191,6 +341,14 @@ class Label(QWidget):
         )
         layout.addWidget(self.filename_label)
 
+        self.size_label = QLabel(_fmt_size(file_path))
+        self.size_label.setAlignment(Qt.AlignCenter)
+        self.size_label.setStyleSheet(
+            "QLabel { font-size: 9px; color: #777;"
+            " padding: 1px; margin: 0px; }"
+        )
+        layout.addWidget(self.size_label)
+
     def setPixmap(self, pixmap):
         self.original_pixmap = pixmap
         self.image_label.setPixmap(pixmap)
@@ -221,15 +379,23 @@ class Label(QWidget):
         ext = os.path.splitext(self.file_path)[1].lower()
         menu = QMenu(self)
         copy_action = menu.addAction("Copy Path")
+        copy_file_action = menu.addAction("Copy File")
         play_action = menu.addAction("Play") if ext not in IMAGE_EXTENSIONS else None
         action = menu.exec_(self.mapToGlobal(position))
         if action == copy_action:
             self.copy_to_clipboard()
+        elif action == copy_file_action:
+            self.copy_file_to_clipboard()
         elif play_action and action == play_action:
             self.play_video()
 
     def copy_to_clipboard(self):
         QApplication.clipboard().setText(self.file_path.replace('/', '\\'))
+
+    def copy_file_to_clipboard(self):
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(self.file_path)])
+        QApplication.clipboard().setMimeData(mime)
 
     def play_video(self):
         try:
@@ -350,24 +516,100 @@ class VideoPlaceholder(QWidget):
         )
         layout.addWidget(self.name_label)
 
+        self.size_label = QLabel(_fmt_size(file_path))
+        self.size_label.setAlignment(Qt.AlignCenter)
+        self.size_label.setStyleSheet(
+            "QLabel { font-size: 9px; color: #777;"
+            " padding: 1px; margin: 0px; }"
+        )
+        layout.addWidget(self.size_label)
+
     def update_display(self, show_original):
         self.name_label.setText(self.decoded_filename if show_original else self.anagram_filename)
 
     def show_context_menu(self, position):
         menu = QMenu(self)
         copy_action = menu.addAction("Copy Path")
+        copy_file_action = menu.addAction("Copy File")
         play_action = menu.addAction("Play")
+        embed_subs_action = menu.addAction("Embed Subtitles")
         action = menu.exec_(self.mapToGlobal(position))
         if action == copy_action:
             QApplication.clipboard().setText(self.file_path.replace('/', '\\'))
+        elif action == copy_file_action:
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(self.file_path)])
+            QApplication.clipboard().setMimeData(mime)
         elif action == play_action:
             self.play_video()
+        elif action == embed_subs_action:
+            self.embed_subtitles()
 
     def play_video(self):
         try:
             subprocess.Popen(['mpv', self.file_path])
         except FileNotFoundError:
             print("Error: mpv is not installed or not in PATH")
+
+    def embed_subtitles(self):
+        """Open subtitle selection dialog and embed subtitles into the video."""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        # Ask user to select a subtitle file
+        subtitle_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Subtitle File",
+            "",
+            "Subtitle Files (*.srt *.ass *.vtt);;All Files (*.*)"
+        )
+        if not subtitle_path:
+            return
+        
+        # Generate output filename with anagram logic
+        output_stem = generate_anagram_output_filename(self.file_path)
+        output_dir = os.path.dirname(self.file_path)
+        temp_output_video = os.path.join(output_dir, output_stem + ".mp4")
+        final_output_video = os.path.join(output_dir, output_stem + ".mif")
+        
+        # Show a progress message
+        QMessageBox.information(self, "Embedding", "Embedding subtitles... Please wait.")
+        
+        # Perform the embedding to a temp MP4 first, then rename to .mif
+        success, error_message = embed_subtitles_ffmpeg(self.file_path, subtitle_path, temp_output_video)
+        if success:
+            try:
+                if os.path.exists(final_output_video):
+                    os.remove(final_output_video)
+                os.replace(temp_output_video, final_output_video)
+            except Exception as e:
+                error_message = f"Failed to rename output to .mif: {e}"
+                debug_print(error_message)
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    "Subtitles were embedded, but the output file could not be renamed to .mif. " + error_message,
+                )
+                return
+        
+        if success:
+            # Ask if user wants to preview with mpv
+            reply = QMessageBox.question(
+                self,
+                "Success",
+                f"Subtitles embedded successfully!\n\nOutput: {os.path.basename(final_output_video)}\n\nPreview with mpv?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                try:
+                    subprocess.Popen(['mpv', final_output_video])
+                except FileNotFoundError:
+                    QMessageBox.warning(self, "Error", "mpv is not installed or not in PATH")
+        else:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Failed to embed subtitles. " + error_message + "\nCheck that ffmpeg is installed and available at C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe or on your PATH.",
+            )
 
     def enterEvent(self, event):
         try:
@@ -453,6 +695,68 @@ class TrashDropZone(QLabel):
             self.file_deleted.emit(file_path)
         except Exception as e:
             print("Could not delete file: " + str(e))
+
+
+class MoveDropZone(QLabel):
+    file_moved = pyqtSignal(str)  # emits the original path after move
+
+    _NORMAL_STYLE = (
+        "QLabel { border: 2px dashed #55a; color: #339; font-size: 14px;"
+        " background: #f0f0ff; border-radius: 6px; cursor: pointer; }"
+    )
+    _HOVER_STYLE = (
+        "QLabel { border: 3px solid #00e; color: #006; font-size: 14px;"
+        " background: #e0e0ff; border-radius: 6px; }"
+    )
+    _SET_STYLE = (
+        "QLabel { border: 2px solid #55a; color: #339; font-size: 13px;"
+        " background: #e8e8ff; border-radius: 6px; }"
+    )
+
+    def __init__(self, parent=None):
+        super(MoveDropZone, self).__init__(parent)
+        self._dest_folder = None
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(52)
+        self.setMaximumHeight(64)
+        self.setAcceptDrops(True)
+        self._refresh_text()
+
+    def _refresh_text(self):
+        if self._dest_folder:
+            self.setText("📁  Move to: {}  (click to change)".format(self._dest_folder))
+            self.setStyleSheet(self._SET_STYLE)
+        else:
+            self.setText("📁  Click to set move destination, then drop files here")
+            self.setStyleSheet(self._NORMAL_STYLE)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            folder = QFileDialog.getExistingDirectory(None, "Select Destination Folder")
+            if folder:
+                self._dest_folder = folder
+                self._refresh_text()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText() and self._dest_folder:
+            self.setStyleSheet(self._HOVER_STYLE)
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self._refresh_text()
+
+    def dropEvent(self, event):
+        self._refresh_text()
+        if not self._dest_folder:
+            return
+        file_path = event.mimeData().text()
+        file_name = os.path.basename(file_path)
+        dest_path = os.path.join(self._dest_folder, file_name)
+        try:
+            os.rename(file_path, dest_path)
+            self.file_moved.emit(file_path)
+        except Exception as e:
+            print("Could not move file: " + str(e))
 
 
 def GenerateMedia(input_file, db):
@@ -542,6 +846,7 @@ class MainWindow(QMainWindow):
         self.current_folder = None
         self.nav_history = []
         self.all_widgets = []
+        self._pre_screencap_widgets = []  # snapshot before screencaps loaded
         self.show_original = False
         self.screencaps_loaded = False
 
@@ -577,10 +882,11 @@ class MainWindow(QMainWindow):
         self.select_folder_button.clicked.connect(self.selectFolder)
         top_bar.addWidget(self.select_folder_button)
 
-        self.show_screencaps_button = QPushButton("Show Screencaps")
-        self.show_screencaps_button.clicked.connect(self._show_screencaps_for_folder)
-        self.show_screencaps_button.setEnabled(False)
-        top_bar.addWidget(self.show_screencaps_button)
+        self.show_screencaps_checkbox = QCheckBox("Show Screencaps")
+        self.show_screencaps_checkbox.setChecked(False)
+        self.show_screencaps_checkbox.setEnabled(False)
+        self.show_screencaps_checkbox.stateChanged.connect(self._on_show_screencaps_toggled)
+        top_bar.addWidget(self.show_screencaps_checkbox)
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search by filename...")
@@ -595,6 +901,15 @@ class MainWindow(QMainWindow):
         self.original_names_checkbox.setChecked(False)
         self.original_names_checkbox.stateChanged.connect(self._on_original_names_toggled)
         top_bar.addWidget(self.original_names_checkbox)
+
+        sort_label = QLabel("Sort:")
+        top_bar.addWidget(sort_label)
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Anagram Name")
+        self.sort_combo.addItem("Original Name")
+        self.sort_combo.addItem("File Size")
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        top_bar.addWidget(self.sort_combo)
 
         self.src_button = QPushButton("SRC")
         self.src_button.clicked.connect(self.open_src_folder)
@@ -619,7 +934,14 @@ class MainWindow(QMainWindow):
 
         self.trash_zone = TrashDropZone()
         self.trash_zone.file_deleted.connect(self._on_file_deleted)
-        main_layout.addWidget(self.trash_zone)
+
+        self.move_zone = MoveDropZone()
+        self.move_zone.file_moved.connect(self._on_file_deleted)  # same: remove from view
+
+        action_bar = QHBoxLayout()
+        action_bar.addWidget(self.trash_zone)
+        action_bar.addWidget(self.move_zone)
+        main_layout.addLayout(action_bar)
 
     def selectFolder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -654,6 +976,11 @@ class MainWindow(QMainWindow):
     def _load_folder(self, folder):
         self.current_folder = folder
         self.screencaps_loaded = False
+        self._pre_screencap_widgets = []
+        # Reset show-screencaps checkbox without triggering the handler
+        self.show_screencaps_checkbox.blockSignals(True)
+        self.show_screencaps_checkbox.setChecked(False)
+        self.show_screencaps_checkbox.blockSignals(False)
         self.search_box.blockSignals(True)
         self.search_box.clear()
         self.search_box.blockSignals(False)
@@ -665,8 +992,34 @@ class MainWindow(QMainWindow):
         except PermissionError:
             return
 
-        folders = sorted([e for e in entries if os.path.isdir(os.path.join(folder, e))])
-        files = sorted([e for e in entries if os.path.isfile(os.path.join(folder, e))])
+        sort_index = self.sort_combo.currentIndex()
+        if sort_index == 1:  # Original Name
+            folders = sorted(
+                [e for e in entries if os.path.isdir(os.path.join(folder, e))],
+                key=lambda e: natural_sort_key(decode_anagram_filename(e))
+            )
+            files = sorted(
+                [e for e in entries if os.path.isfile(os.path.join(folder, e))],
+                key=lambda e: natural_sort_key(decode_anagram_filename(e))
+            )
+        elif sort_index == 2:  # File Size
+            folders = sorted(
+                [e for e in entries if os.path.isdir(os.path.join(folder, e))],
+                key=natural_sort_key
+            )
+            files = sorted(
+                [e for e in entries if os.path.isfile(os.path.join(folder, e))],
+                key=lambda e: os.path.getsize(os.path.join(folder, e))
+            )
+        else:  # Anagram Name
+            folders = sorted(
+                [e for e in entries if os.path.isdir(os.path.join(folder, e))],
+                key=natural_sort_key
+            )
+            files = sorted(
+                [e for e in entries if os.path.isfile(os.path.join(folder, e))],
+                key=natural_sort_key
+            )
 
         for folder_name in folders:
             fp = os.path.join(folder, folder_name)
@@ -704,21 +1057,36 @@ class MainWindow(QMainWindow):
             self.all_widgets.append(vp)
 
         has_videos = any(isinstance(w, VideoPlaceholder) for w in self.all_widgets)
-        self.show_screencaps_button.setEnabled(has_videos)
+        self.show_screencaps_checkbox.setEnabled(has_videos)
         self.updateLayout()
 
-    def _show_screencaps_for_folder(self):
-        if self.screencaps_loaded:
-            return
-        self.screencaps_loaded = True
-        self.show_screencaps_button.setEnabled(False)
-        for i, w in enumerate(self.all_widgets):
-            if isinstance(w, VideoPlaceholder):
+    def _on_show_screencaps_toggled(self, state):
+        if state == Qt.Checked:
+            if self.screencaps_loaded:
+                return
+            self.screencaps_loaded = True
+            # Save snapshot so we can revert
+            self._pre_screencap_widgets = list(self.all_widgets)
+            video_indices = [
+                i for i, w in enumerate(self.all_widgets)
+                if isinstance(w, VideoPlaceholder)
+            ]
+            print("Loading screencaps for {} video(s)...".format(len(video_indices)))
+            for i in tqdm(video_indices, desc="Generating screencaps", unit="file"):
+                w = self.all_widgets[i]
+                print("  Screencap: " + w.file_path)
                 label = GenerateMedia(w.file_path, self.db)
                 if label is not None:
                     label.update_display(self.show_original)
                     self.all_widgets[i] = label
-        self.updateLayout()
+            print("Done.")
+            self.updateLayout()
+        else:
+            # Revert to pre-screencap state
+            if self._pre_screencap_widgets:
+                self.all_widgets = list(self._pre_screencap_widgets)
+            self.screencaps_loaded = False
+            self.updateLayout()
 
     def resizeEvent(self, event):
         if self.current_folder:
@@ -734,6 +1102,10 @@ class MainWindow(QMainWindow):
             if hasattr(w, 'update_display'):
                 w.update_display(self.show_original)
         self.updateLayout()
+
+    def _on_sort_changed(self, index):
+        if self.current_folder:
+            self._load_folder(self.current_folder)
 
     def _clear_grid(self):
         for i in reversed(range(self.scroll_area_layout.count())):
